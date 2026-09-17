@@ -11,7 +11,7 @@ locally):
 
     docker run --rm --env-file .env \\
       -v "$(pwd):/workspace" -w /workspace \\
-      darwinbox-fde-qa-backend python backend/tests/eval_questions.py
+      truthtable-backend python backend/tests/eval_questions.py
 
 or locally with dependencies installed:
 

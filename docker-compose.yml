@@ -1,6 +1,9 @@
 services:
   backend:
     build: ./backend
+    # Pinned so the image name doesn't depend on the checkout directory name —
+    # the test and eval commands in the README refer to it.
+    image: truthtable-backend
     ports:
       - "8000:8000"
     volumes:

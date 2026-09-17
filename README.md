@@ -140,12 +140,23 @@ questions have something real to show:
   ingestion has to strip currency symbols and thousands separators.
 - `customers.csv` — 16 customers across 4 regions (`customer_id, name,
   region`).
+- `regional_plan.xlsx` — a two-sheet workbook (`Targets`, `Headcount`) that
+  becomes two separate tables, `regional_plan_targets` and
+  `regional_plan_headcount`, to exercise multi-sheet Excel ingestion.
 
 The key detail is `orders.cust_id` vs `customers.customer_id`: the join
 column is named differently in each file, so cross-file questions only work
 if the relationship is actually inferred rather than assumed. Monthly
 revenue trends upward over the six months, so "revenue over time" produces a
 meaningful line chart.
+
+A question that exercises all of it at once — three tables, two files, two
+formats, and a two-hop join:
+
+> *Which regions beat their H1 target revenue, and by how much?*
+
+(orders → customers on `cust_id`/`customer_id` → the Excel `Targets` sheet
+on `region`.)
 
 ## Setup
 
@@ -200,11 +211,14 @@ Open http://localhost:3000, upload a CSV/Excel file (try the ones in
 
 ## Running the tests
 
+Both commands below use the `truthtable-backend` image. `docker compose up
+--build` (above) builds it; if you haven't run that, build it directly with
+`docker build -t truthtable-backend ./backend`.
+
 ```bash
 # unit tests (ingestion + query validation), no LLM calls, no API key needed
-docker run --rm \
-  -v "$(pwd)/backend/app:/app/app" -v "$(pwd)/backend/tests:/app/tests" \
-  -w /app darwinbox-fde-qa-backend python -m pytest tests -v
+docker run --rm -v "$(pwd):/workspace" -w /workspace/backend \
+  truthtable-backend python -m pytest tests -v
 
 # or locally, from backend/ with the venv active:
 pytest tests -v
@@ -227,7 +241,7 @@ taken from a model response. It makes real LLM calls, so it needs
 ```bash
 docker run --rm --env-file .env \
   -v "$(pwd):/workspace" -w /workspace \
-  darwinbox-fde-qa-backend python backend/tests/eval_questions.py
+  truthtable-backend python backend/tests/eval_questions.py
 
 # or locally, from the repo root with the venv active and GROQ_API_KEY exported:
 python backend/tests/eval_questions.py
