@@ -41,9 +41,11 @@ def validate_sql(sql: str) -> str:
     return cleaned
 
 
-def run_query(con, sql: str) -> tuple[list[str], list[dict]]:
+def run_query(con, sql: str) -> tuple[list[str], list[dict], str]:
+    """Returns (columns, rows, executed_sql). The executed SQL is the post-validation
+    query — what actually ran, which is what the UI shows."""
     validated = validate_sql(sql)
     result = con.execute(validated)
     columns = [desc[0] for desc in result.description]
     rows = [dict(zip(columns, row)) for row in result.fetchall()]
-    return columns, rows
+    return columns, rows, validated

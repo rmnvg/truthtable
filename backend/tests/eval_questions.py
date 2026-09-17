@@ -36,40 +36,46 @@ SAMPLE_FILES = ["orders.csv", "customers.csv"]
 CANNOT_ANSWER = "CANNOT_ANSWER"
 TOLERANCE = 0.01
 
+# Expected values were computed independently with pandas over sample_data/,
+# not taken from a model response — see README.
 CASES = [
     {
         "label": "Simple total",
         "question": "What is the total (sum) of all order amounts?",
-        "expected": 1614.75,
+        "expected": 59868.57,
     },
     {
         "label": "Average",
         "question": "What is the average order amount across all orders?",
-        "expected": 269.125,
+        "expected": 299.3428,
     },
     {
         "label": "Filter",
-        "question": "What is the sum of order amounts for orders with an amount greater than $200?",
-        "expected": 1290.25,
+        "question": "What is the sum of order amounts for orders with an amount greater than $500?",
+        "expected": 7707.50,
     },
     {
         "label": "Count filter",
-        "question": "How many orders have an amount greater than $100?",
-        "expected": 4,
+        "question": "How many orders are in the Software category?",
+        "expected": 46,
     },
     {
         "label": "Cross-file join",
         "question": "What is the sum of order amounts for customers located in the West region?",
-        "expected": 755.25,
+        "expected": 17047.16,
     },
     {
-        "label": "Trend/comparison",
+        "label": "Trend",
+        "question": "What was the total revenue in June 2024?",
+        "expected": 14231.68,
+    },
+    {
+        "label": "Comparison",
         "question": (
-            "Compute the total order amount for the West region minus the total "
-            "order amount for the East region. Return this difference as a "
-            "single number."
+            "How much more revenue was there in June 2024 than in January 2024? "
+            "Return the difference as a single number."
         ),
-        "expected": 45.75,
+        "expected": 8039.00,
     },
     {
         "label": "Unanswerable",
@@ -102,12 +108,12 @@ def answer_question(con: duckdb.DuckDBPyConnection, table_names: list[str], ques
         return CANNOT_ANSWER, sql, None, None
 
     try:
-        columns, rows = run_query(con, sql)
+        columns, rows, _ = run_query(con, sql)
     except Exception as exc:
         retry_sql = generate_sql(question, schema_description, prior_error=str(exc))
         if retry_sql.startswith(CANNOT_ANSWER):
             return CANNOT_ANSWER, retry_sql, None, None
-        columns, rows = run_query(con, retry_sql)
+        columns, rows, _ = run_query(con, retry_sql)
         sql = retry_sql
 
     return "OK", sql, columns, rows

@@ -150,16 +150,16 @@ def describe_schema(con, table_names: list[str], sample_rows: int = 3) -> str:
     return "\n\n".join(blocks)
 
 
-def suggest_join_hints(con, table_names: list[str]) -> str:
+def find_join_candidates(con, table_names: list[str]) -> list[dict]:
     if len(table_names) < 2:
-        return ""
+        return []
 
     table_columns = {
         name: list(con.execute(f'DESCRIBE "{name}"').df()["column_name"])
         for name in table_names
     }
 
-    hints: list[tuple[float, str]] = []
+    candidates: list[dict] = []
     for t1, t2 in itertools.combinations(table_names, 2):
         for c1 in table_columns[t1]:
             for c2 in table_columns[t2]:
@@ -168,11 +168,22 @@ def suggest_join_hints(con, table_names: list[str]) -> str:
                 if c1.endswith("id") and c2.endswith("id"):
                     score += _JOIN_ID_BONUS
                 if exact or score > _JOIN_SIMILARITY_THRESHOLD:
-                    hints.append((score, f"{t1}.{c1} <-> {t2}.{c2}"))
+                    candidates.append(
+                        {
+                            "left": f"{t1}.{c1}",
+                            "right": f"{t2}.{c2}",
+                            "score": round(score, 3),
+                        }
+                    )
 
-    if not hints:
+    candidates.sort(key=lambda candidate: -candidate["score"])
+    return candidates
+
+
+def suggest_join_hints(con, table_names: list[str]) -> str:
+    candidates = find_join_candidates(con, table_names)
+    if not candidates:
         return ""
 
-    hints.sort(key=lambda h: -h[0])
-    lines = "\n".join(f"  - {text}" for _, text in hints)
+    lines = "\n".join(f"  - {c['left']} <-> {c['right']}" for c in candidates)
     return f"Possible join keys:\n{lines}"

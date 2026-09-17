@@ -4,9 +4,16 @@ export interface SessionResponse {
   session_id: string;
 }
 
+export interface JoinHint {
+  left: string;
+  right: string;
+  score: number;
+}
+
 export interface UploadResponse {
   tables: string[];
   added: string[];
+  join_hints: JoinHint[];
 }
 
 export interface ChartSuggestion {
@@ -18,11 +25,23 @@ export interface ChartSuggestion {
 export type QueryRow = Record<string, unknown>;
 
 export interface AskResponse {
+  status: "answered" | "cannot_answer";
   answer: string;
   sql: string | null;
+  executed_sql: string | null;
+  retried: boolean;
   columns: string[];
   rows: QueryRow[];
   chart: ChartSuggestion | null;
+}
+
+/** Thrown when the backend no longer knows the session — e.g. it restarted and
+ * the in-memory session store was cleared. */
+export class SessionExpiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionExpiredError";
+  }
 }
 
 async function parseErrorDetail(response: Response): Promise<string> {
@@ -40,7 +59,11 @@ async function parseErrorDetail(response: Response): Promise<string> {
 async function request<T>(path: string, init: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, init);
   if (!response.ok) {
-    throw new Error(await parseErrorDetail(response));
+    const detail = await parseErrorDetail(response);
+    if (response.status === 404) {
+      throw new SessionExpiredError(detail);
+    }
+    throw new Error(detail);
   }
   return response.json() as Promise<T>;
 }

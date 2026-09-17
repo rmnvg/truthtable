@@ -4,12 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   askQuestion,
   createSession,
+  SessionExpiredError,
   uploadFiles,
   type ChartSuggestion,
+  type JoinHint,
   type QueryRow,
   type UploadResponse,
 } from "@/lib/api";
 import { ResultChart } from "@/components/ResultChart";
+import { formatValue } from "@/lib/format";
 
 type TableEntry = {
   name: string;
@@ -21,21 +24,20 @@ type Exchange = {
   id: string;
   question: string;
   status: "loading" | "done" | "error";
+  cannotAnswer?: boolean;
+  retried?: boolean;
   answer?: string;
-  sql?: string | null;
+  executedSql?: string | null;
   columns?: string[];
   rows?: QueryRow[];
   chart?: ChartSuggestion | null;
   error?: string;
 };
 
-const MAX_DISPLAYED_ROWS = 50;
+const SESSION_LOST_MESSAGE =
+  "The backend restarted, so this session's uploaded tables were lost. A new session has been started — please re-upload your files.";
 
-function formatCellValue(value: unknown): string {
-  if (value === null || value === undefined) return "—";
-  if (value instanceof Date) return value.toISOString();
-  return String(value);
-}
+const MAX_DISPLAYED_ROWS = 50;
 
 const ACCEPTED_EXTENSIONS = [".csv", ".xlsx", ".xls"];
 
@@ -54,7 +56,9 @@ export default function Home() {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [tables, setTables] = useState<TableEntry[]>([]);
+  const [joinHints, setJoinHints] = useState<JoinHint[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [question, setQuestion] = useState("");
@@ -65,6 +69,20 @@ export default function Home() {
     createSession()
       .then((res) => setSessionId(res.session_id))
       .catch((err) => setSessionError(errorMessage(err)));
+  }, []);
+
+  /** The backend keeps sessions in memory, so a restart invalidates them. Rather
+   * than leaving the user on a dead 404, start a fresh session and say so. */
+  const recoverSession = useCallback(async () => {
+    setTables([]);
+    setJoinHints([]);
+    setSessionNotice(SESSION_LOST_MESSAGE);
+    try {
+      const res = await createSession();
+      setSessionId(res.session_id);
+    } catch (err) {
+      setSessionError(errorMessage(err));
+    }
   }, []);
 
   const handleFiles = useCallback(
@@ -87,8 +105,11 @@ export default function Home() {
       if (validFiles.length === 0) return;
 
       setIsUploading(true);
+      setSessionNotice(null);
       const newEntries: TableEntry[] = [];
       const failures: string[] = [];
+      let latestHints: JoinHint[] | null = null;
+      let sessionLost = false;
 
       for (const file of validFiles) {
         try {
@@ -97,12 +118,38 @@ export default function Home() {
           for (const name of result.added) {
             newEntries.push({ name, source: file.name, kind });
           }
+          latestHints = result.join_hints;
         } catch (err) {
+          if (err instanceof SessionExpiredError) {
+            sessionLost = true;
+            break;
+          }
           failures.push(`${file.name}: ${errorMessage(err)}`);
         }
       }
 
-      setTables((prev) => [...prev, ...newEntries]);
+      if (sessionLost) {
+        await recoverSession();
+        setIsUploading(false);
+        return;
+      }
+
+      // Re-uploading a file replaces its table rather than adding a second entry.
+      setTables((prev) => {
+        const merged = [...prev];
+        for (const entry of newEntries) {
+          const existing = merged.findIndex((table) => table.name === entry.name);
+          if (existing === -1) {
+            merged.push(entry);
+          } else {
+            merged[existing] = entry;
+          }
+        }
+        return merged;
+      });
+      if (latestHints) {
+        setJoinHints(latestHints);
+      }
       if (failures.length > 0) {
         setUploadError((prev) => {
           const message = `Failed to upload:\n${failures.join("\n")}`;
@@ -111,7 +158,7 @@ export default function Home() {
       }
       setIsUploading(false);
     },
-    [sessionId]
+    [sessionId, recoverSession]
   );
 
   const onDrop = useCallback(
@@ -163,8 +210,10 @@ export default function Home() {
               ? {
                   ...ex,
                   status: "done",
+                  cannotAnswer: res.status === "cannot_answer",
+                  retried: res.retried,
                   answer: res.answer,
-                  sql: res.sql,
+                  executedSql: res.executed_sql,
                   columns: res.columns,
                   rows: res.rows,
                   chart: res.chart,
@@ -173,16 +222,26 @@ export default function Home() {
           )
         );
       } catch (err) {
+        const expired = err instanceof SessionExpiredError;
+        if (expired) {
+          void recoverSession();
+        }
         setExchanges((prev) =>
           prev.map((ex) =>
-            ex.id === id ? { ...ex, status: "error", error: errorMessage(err) } : ex
+            ex.id === id
+              ? {
+                  ...ex,
+                  status: "error",
+                  error: expired ? SESSION_LOST_MESSAGE : errorMessage(err),
+                }
+              : ex
           )
         );
       } finally {
         setIsAsking(false);
       }
     },
-    [sessionId, question, isAsking]
+    [sessionId, question, isAsking, recoverSession]
   );
 
   const hasTables = tables.length > 0;
@@ -192,9 +251,13 @@ export default function Home() {
       <main className="flex w-full max-w-3xl flex-col gap-8 px-6 py-16 sm:px-10">
         <header className="flex flex-col gap-2">
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
-            Darwinbox FDE Q&A
+            truthtable
           </h1>
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
+            Ask questions about your spreadsheets. Every answer is computed by SQL
+            against your data, and the query is shown.
+          </p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-500">
             {sessionId
               ? `Session ready (${sessionId.slice(0, 8)}…)`
               : sessionError
@@ -202,6 +265,12 @@ export default function Home() {
                 : "Starting session…"}
           </p>
         </header>
+
+        {sessionNotice && (
+          <p className="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
+            {sessionNotice}
+          </p>
+        )}
 
         <div
           onDrop={onDrop}
@@ -272,6 +341,28 @@ export default function Home() {
                 </li>
               ))}
             </ul>
+
+            {joinHints.length > 0 && (
+              <div className="flex flex-col gap-2 rounded-lg border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
+                <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  Detected relationships
+                </p>
+                <ul className="flex flex-col gap-1">
+                  {joinHints.slice(0, 5).map((hint) => (
+                    <li
+                      key={`${hint.left}-${hint.right}`}
+                      className="font-mono text-xs text-zinc-700 dark:text-zinc-300"
+                    >
+                      {hint.left} <span className="text-zinc-400">↔</span> {hint.right}
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs text-zinc-500 dark:text-zinc-500">
+                  Found by comparing column names across files, then passed to the
+                  model so it doesn&apos;t have to guess how your files relate.
+                </p>
+              </div>
+            )}
           </section>
         )}
 
@@ -302,17 +393,47 @@ export default function Home() {
                   )}
 
                   {exchange.status === "done" && (
-                    <div className="flex max-w-full flex-col gap-3 self-start rounded-2xl rounded-bl-sm bg-zinc-100 px-4 py-3 text-sm text-zinc-900 dark:bg-zinc-900 dark:text-zinc-100">
+                    <div
+                      className={`flex max-w-full flex-col gap-3 self-start rounded-2xl rounded-bl-sm px-4 py-3 text-sm ${
+                        exchange.cannotAnswer
+                          ? "bg-amber-50 text-amber-900 dark:bg-amber-950/50 dark:text-amber-200"
+                          : "bg-zinc-100 text-zinc-900 dark:bg-zinc-900 dark:text-zinc-100"
+                      }`}
+                    >
+                      {exchange.cannotAnswer && (
+                        <span className="w-fit rounded-full bg-amber-200 px-2.5 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-900/60 dark:text-amber-200">
+                          Declined to answer
+                        </span>
+                      )}
+
                       <p>{exchange.answer}</p>
 
-                      {exchange.sql && (
+                      {exchange.cannotAnswer && (
+                        <p className="text-xs text-amber-700 dark:text-amber-300/80">
+                          No SQL was run. The model is required to refuse rather than
+                          invent a join or a column that isn&apos;t in your data.
+                        </p>
+                      )}
+
+                      {exchange.retried && (
+                        <span className="w-fit rounded-full bg-zinc-200 px-2.5 py-0.5 text-xs font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                          Self-corrected after a SQL error
+                        </span>
+                      )}
+
+                      {exchange.executedSql && (
                         <details className="group">
                           <summary className="cursor-pointer text-xs font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200">
                             Show SQL used
                           </summary>
                           <pre className="mt-2 overflow-x-auto rounded-lg bg-zinc-950 px-3 py-2 text-xs text-zinc-100 dark:bg-black">
-                            <code>{exchange.sql}</code>
+                            <code>{exchange.executedSql}</code>
                           </pre>
+                          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
+                            This is the exact query that ran, after validation:
+                            read-only (SELECT/WITH only, no INSERT/UPDATE/DELETE/DROP)
+                            with a row cap applied.
+                          </p>
                         </details>
                       )}
 
@@ -340,7 +461,7 @@ export default function Home() {
                                   >
                                     {exchange.columns!.map((col) => (
                                       <td key={col} className="whitespace-nowrap px-3 py-2">
-                                        {formatCellValue(row[col])}
+                                        {formatValue(row[col])}
                                       </td>
                                     ))}
                                   </tr>

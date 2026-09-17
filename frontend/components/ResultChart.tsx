@@ -17,6 +17,7 @@ import {
   YAxis,
 } from "recharts";
 import type { ChartSuggestion, QueryRow } from "@/lib/api";
+import { formatValue } from "@/lib/format";
 
 // Fixed-order categorical palette (light/dark), validated for CVD-safe
 // adjacent contrast. Never cycle or reassign by rank — see dataviz skill.
@@ -135,9 +136,16 @@ export function ResultChart({ chart, rows }: ResultChartProps) {
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
           <CartesianGrid stroke={chrome.grid} vertical={false} />
-          <XAxis dataKey={chart.x} tick={axisStyle} stroke={chrome.axis} />
+          <XAxis
+            dataKey={chart.x}
+            tick={axisStyle}
+            stroke={chrome.axis}
+            tickFormatter={formatValue}
+          />
           <YAxis tick={axisStyle} stroke={chrome.axis} />
           <Tooltip
+            labelFormatter={formatValue}
+            formatter={(value: unknown) => formatValue(value)}
             contentStyle={{
               background: isDark ? "#1a1a19" : "#fcfcfb",
               border: `1px solid ${chrome.grid}`,
@@ -162,10 +170,17 @@ export function ResultChart({ chart, rows }: ResultChartProps) {
     <ResponsiveContainer width="100%" height={260}>
       <BarChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
         <CartesianGrid stroke={chrome.grid} vertical={false} />
-        <XAxis dataKey={chart.x} tick={axisStyle} stroke={chrome.axis} />
+        <XAxis
+          dataKey={chart.x}
+          tick={axisStyle}
+          stroke={chrome.axis}
+          tickFormatter={formatValue}
+        />
         <YAxis tick={axisStyle} stroke={chrome.axis} />
         <Tooltip
           cursor={{ fill: isDark ? "rgba(255,255,255,0.06)" : "rgba(11,11,11,0.04)" }}
+          labelFormatter={formatValue}
+          formatter={(value: unknown) => formatValue(value)}
           contentStyle={{
             background: isDark ? "#1a1a19" : "#fcfcfb",
             border: `1px solid ${chrome.grid}`,
