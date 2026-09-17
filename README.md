@@ -6,6 +6,51 @@ DuckDB SQL query, runs it against your actual uploaded data, and returns a
 natural-language answer alongside the exact SQL used (so you can verify it
 rather than just trust it) and, where it helps, a chart.
 
+> **[WRITEUP.md](WRITEUP.md)** — one-page summary of the approach, the key
+> decisions and their trade-offs, and what I'd build next.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    U(["User"]) -- "CSV / XLSX files" --> UP["POST /upload"]
+    UP --> CLEAN["pandas — normalise column names,<br/>strip currency symbols, infer dates"]
+    CLEAN --> DDB[("DuckDB — in-memory,<br/>one database per session")]
+    CLEAN --> HINTS["join-key heuristic —<br/>difflib over column names"]
+
+    U -- "question" --> ASK["POST /ask"]
+    ASK --> CTX["context sent to the model: table schemas,<br/>3 sample rows, suggested join keys, recent history"]
+    DDB -. "schema + 3 sample rows" .-> CTX
+    HINTS -.-> CTX
+
+    CTX --> GEN["LLM 1 — write one SELECT"]
+    GEN -- "CANNOT_ANSWER" --> REFUSE["Declined to answer —<br/>no SQL is executed"]
+    GEN -- "SQL" --> VAL{"validate —<br/>read-only, row cap"}
+    VAL -- "rejected" --> REFUSE
+    VAL -- "approved" --> EXEC["execute against DuckDB —<br/>every number originates here"]
+    EXEC -- "SQL error, one retry" --> GEN
+    EXEC -- "result rows" --> SUM["LLM 2 — phrase the result,<br/>forbidden from recomputing"]
+    EXEC -- "column names" --> CH["LLM 3 — is a chart worth showing?"]
+
+    SUM --> OUT(["answer + executed SQL + result table + chart"])
+    CH --> OUT
+    REFUSE --> OUT
+
+    classDef llm fill:#e8f0fe,stroke:#2a78d6,color:#0b0b0b
+    classDef guard fill:#fff4e5,stroke:#eb6834,color:#0b0b0b
+    classDef data fill:#e6f7f0,stroke:#1baf7a,color:#0b0b0b
+    class GEN,SUM,CH llm
+    class VAL,REFUSE guard
+    class DDB,EXEC data
+```
+
+Blue nodes are the only places a language model is involved; green is where
+computation actually happens; orange are the guardrails. The shape of the
+diagram is the point: **the model writes SQL and phrases results, but never
+touches a number.** Validation enforces `SELECT`/`WITH` only, a keyword
+blocklist (`INSERT/UPDATE/DELETE/DROP/ALTER/...`) and an automatic row cap
+before anything reaches the database.
+
 ## How it works
 
 1. **Upload** — CSV/XLSX/XLS files are parsed with pandas, cleaned (column
