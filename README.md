@@ -1,30 +1,166 @@
 # darwinbox-fde-qa
 
-Full-stack AI data Q&A web app.
+A full-stack AI data Q&A app: upload one or more CSV/Excel files, and ask
+questions about them in plain English. The app turns each question into a
+DuckDB SQL query, runs it against your actual uploaded data, and returns a
+natural-language answer alongside the exact SQL used (so you can verify it
+rather than just trust it) and, where it helps, a chart.
 
-## Backend
+## How it works
 
-Python 3.11, FastAPI, served with uvicorn.
+1. **Upload** — CSV/XLSX/XLS files are parsed with pandas, cleaned (column
+   names normalized to snake_case, currency/percent symbols stripped and
+   numeric-coerced, date columns inferred), and materialized as tables in an
+   in-memory DuckDB database scoped to your session.
+2. **Ask** — your question, the schema of every uploaded table (columns +
+   types + sample rows), a few heuristic join-key suggestions across tables,
+   and recent conversation history are sent to an LLM, which returns a single
+   `SELECT` query — or `CANNOT_ANSWER: <reason>` if the schema can't answer
+   it or the join would be a guess.
+3. **Execute** — the query is validated (SELECT/WITH only, no
+   DDL/DML keywords, an automatic `LIMIT` if none given) and run directly
+   against DuckDB — the numbers you see are computed by DuckDB, not
+   hallucinated by the LLM. If it fails, the LLM gets one retry with the
+   error message.
+4. **Answer** — a second LLM call turns the *already-computed* result into
+   one plain-English sentence (explicitly instructed not to recompute or
+   invent numbers), and a third call decides whether a chart would help.
 
-### Run with Docker (recommended)
+## Tech stack, and why
+
+**Backend: FastAPI + DuckDB (Python 3.11)**
+- FastAPI for a small, typed, async-friendly API surface with minimal
+  boilerplate.
+- DuckDB as the query engine because it runs in-process (no separate DB
+  server to stand up for a prototype), reads CSV/pandas DataFrames natively,
+  and speaks real SQL — so the LLM's job is just "write SQL," not learn a
+  bespoke query DSL, and the actual computation (sums, joins, filters) is
+  done by a real execution engine instead of the LLM doing arithmetic.
+- pandas + openpyxl for ingestion, since they're the most robust way to
+  handle inconsistent real-world CSV/Excel formatting (currency symbols,
+  mixed date formats, multi-sheet workbooks).
+
+**LLM layer: Groq running Llama (`openai/gpt-oss-120b`)**
+- Groq's inference is fast enough that a chat-style "ask a question, get an
+  answer" UX doesn't feel like it's stuck behind a slow API call.
+- Using an open-weight model via Groq keeps the app provider-agnostic and
+  cheap to run for a prototype; the model is swappable via `GROQ_MODEL`.
+- `temperature=0` everywhere — this is a data tool, not a creative one;
+  determinism matters more than variety.
+
+**Frontend: Next.js (App Router, TypeScript, Tailwind)**
+- App Router + a single client-side page is enough for this app's shape (one
+  session, one conversation) without needing server-side data fetching or
+  multiple routes.
+- Tailwind for fast, consistent styling without a component library
+  dependency.
+- Recharts for charts — small API surface, good enough defaults for
+  bar/line/pie without needing a heavier visualization library.
+
+## Project layout
+
+```
+backend/
+  app/
+    main.py          FastAPI app: /session, /upload, /ask
+    session.py        In-memory session store (DuckDB connection per session)
+    ingestion.py       File parsing, cleaning, schema description, join hints
+    llm.py             Groq calls: generate_sql, suggest_chart, summarize_answer
+    query_engine.py     SQL validation + execution against DuckDB
+  tests/
+    test_ingestion.py
+    test_query_engine.py
+    eval_questions.py   Standalone LLM-accuracy eval (see below)
+frontend/
+  app/page.tsx          Upload zone + chat interface
+  components/ResultChart.tsx
+  lib/api.ts             Typed client for the backend API
+sample_data/              Example CSVs used in manual testing and the eval script
+```
+
+## Setup
+
+### Prerequisites
+
+- A free Groq API key from https://console.groq.com
+- Either Docker, or Python 3.11 + Node.js locally
+
+### 1. Environment variables
+
+```bash
+cp .env.example .env
+# edit .env and set GROQ_API_KEY=<your key>
+```
+
+`.env` (repo root) is used by the backend, whether run via Docker or
+directly. `GROQ_MODEL` defaults to `openai/gpt-oss-120b` if unset.
+
+### 2. Backend
+
+**With Docker (recommended):**
 
 ```bash
 docker compose up --build
 ```
 
-The API is then available at http://localhost:8000, with live reload on
-changes to `backend/app`.
+API is available at http://localhost:8000, with live reload on changes to
+`backend/app`.
 
-### Run without Docker
+**Without Docker:**
 
 ```bash
 cd backend
 python3.11 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+export $(grep -v '^#' ../.env | xargs)   # load GROQ_API_KEY into the shell
 uvicorn app.main:app --reload
 ```
 
-## Frontend
+### 3. Frontend
 
-TBD.
+```bash
+cd frontend
+cp .env.local.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:8000
+npm install
+npm run dev
+```
+
+Open http://localhost:3000, upload a CSV/Excel file (try the ones in
+`sample_data/`), and start asking questions.
+
+## Running the tests
+
+```bash
+# unit tests (ingestion + query validation), no LLM calls, no API key needed
+docker run --rm \
+  -v "$(pwd)/backend/app:/app/app" -v "$(pwd)/backend/tests:/app/tests" \
+  -w /app darwinbox-fde-qa-backend python -m pytest tests -v
+
+# or locally, from backend/ with the venv active:
+pytest tests -v
+```
+
+## Running the accuracy eval
+
+`backend/tests/eval_questions.py` is a standalone script (not a pytest
+suite) that exercises the ingestion → LLM → query-engine pipeline directly
+against `sample_data/` — no HTTP layer involved. It runs a fixed set of
+question/expected-answer pairs (a simple total, an average, a filter, a
+cross-file join, a trend/comparison, a count, and one deliberately
+unanswerable question) and grades each by comparing the **computed numeric
+result** against the expected value — not the LLM's wording. It makes real
+LLM calls, so it needs `GROQ_API_KEY` set.
+
+```bash
+docker run --rm --env-file .env \
+  -v "$(pwd):/workspace" -w /workspace \
+  darwinbox-fde-qa-backend python backend/tests/eval_questions.py
+
+# or locally, from the repo root with the venv active and GROQ_API_KEY exported:
+python backend/tests/eval_questions.py
+```
+
+It prints PASS/FAIL per question plus a summary line, and exits non-zero if
+anything failed — useful for re-running after prompt changes to catch
+regressions in answer accuracy.
