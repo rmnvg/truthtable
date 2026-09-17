@@ -26,6 +26,57 @@ rather than just trust it) and, where it helps, a chart.
    one plain-English sentence (explicitly instructed not to recompute or
    invent numbers), and a third call decides whether a chart would help.
 
+## What this adds on top of "just call an LLM"
+
+An LLM alone will answer *every* question, confidently, whether or not the
+data supports it. Each of the following exists because the naive version
+failed a test I ran against it — and each one is visible in the UI, not
+hidden in the backend.
+
+**It refuses instead of guessing a join.** This is the one that mattered
+most. Given `sales.csv` (`store_id, date, revenue`) and `weather.csv`
+(`city, date, temperature`) — two files whose *only* shared column is
+`date` — the model happily wrote `JOIN weather USING (date)`. The query ran
+without error and returned confident per-store revenue totals that were
+**silently wrong**: every store row matched every city's weather row for
+that date, duplicating revenue in the sum. Nothing about the output looked
+broken. The fix was to make the prompt require a join column to be a real
+shared *identifier*, not an incidental shared attribute, and to answer
+`CANNOT_ANSWER` otherwise. It now replies: *"no reliable join between
+weather and sales (date not a unique identifier for linking stores to
+cities)."* The UI renders that as a distinct amber **"Declined to answer"**
+card, so a refusal reads as a deliberate safety behaviour rather than a
+failure.
+
+**The LLM never does arithmetic.** It only writes SQL; DuckDB computes every
+number. The summarising call receives the already-computed rows and is
+explicitly forbidden from recomputing or introducing outside figures — so
+the sentence can only ever re-phrase numbers that a real query engine
+produced.
+
+**Join candidates are suggested, not guessed.** Before the model sees the
+question, column names are compared pairwise across files (`difflib`
+similarity, with extra weight when both end in `id`). That's how it links
+`orders.cust_id` to `customers.customer_id` despite the names not matching.
+These candidates are shown in the UI under **"Detected relationships"**, so
+you can see what the model was told.
+
+**Generated SQL is validated before it runs.** `SELECT`/`WITH` only, a
+word-boundary blocklist (`INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/ATTACH/
+COPY/PRAGMA/EXPORT/IMPORT/CALL`), and an automatic row cap. The UI shows the
+**post-validation** query — what actually executed, row cap included — not
+the model's raw proposal.
+
+**It self-corrects once.** If DuckDB rejects the query, the error text goes
+back to the model for exactly one retry (never a loop). When that happens
+the answer is tagged **"Self-corrected after a SQL error"**.
+
+**Accuracy is measured, not assumed.** `backend/tests/eval_questions.py`
+runs a fixed question set and grades the **computed numeric result** against
+values calculated independently with pandas — so a fluent-but-wrong answer
+fails. It's the regression test for prompt changes; the join-guard fix above
+was verified not to break the legitimate-join cases this way.
+
 ## Tech stack, and why
 
 **Backend: FastAPI + DuckDB (Python 3.11)**
@@ -75,8 +126,26 @@ frontend/
   app/page.tsx          Upload zone + chat interface
   components/ResultChart.tsx
   lib/api.ts             Typed client for the backend API
+  lib/format.ts           Display formatting for result values
 sample_data/              Example CSVs used in manual testing and the eval script
 ```
+
+### Sample data
+
+`sample_data/` holds two deliberately-imperfect files, sized so that trend
+questions have something real to show:
+
+- `orders.csv` — 200 orders across Jan–Jun 2024 (`order_id, cust_id,
+  category, amount, order_date`), with amounts formatted as `"$1,234.56"` so
+  ingestion has to strip currency symbols and thousands separators.
+- `customers.csv` — 16 customers across 4 regions (`customer_id, name,
+  region`).
+
+The key detail is `orders.cust_id` vs `customers.customer_id`: the join
+column is named differently in each file, so cross-file questions only work
+if the relationship is actually inferred rather than assumed. Monthly
+revenue trends upward over the six months, so "revenue over time" produces a
+meaningful line chart.
 
 ## Setup
 
@@ -145,12 +214,15 @@ pytest tests -v
 
 `backend/tests/eval_questions.py` is a standalone script (not a pytest
 suite) that exercises the ingestion → LLM → query-engine pipeline directly
-against `sample_data/` — no HTTP layer involved. It runs a fixed set of
+against `sample_data/` — no HTTP layer involved. It runs 8 fixed
 question/expected-answer pairs (a simple total, an average, a filter, a
-cross-file join, a trend/comparison, a count, and one deliberately
-unanswerable question) and grades each by comparing the **computed numeric
-result** against the expected value — not the LLM's wording. It makes real
-LLM calls, so it needs `GROQ_API_KEY` set.
+count, a cross-file join, a month-level trend, a period-over-period
+comparison, and one deliberately unanswerable question) and grades each by
+comparing the **computed numeric result** against the expected value — not
+the LLM's wording, so a fluent-but-wrong answer still fails. The expected
+values were computed independently with pandas over `sample_data/`, not
+taken from a model response. It makes real LLM calls, so it needs
+`GROQ_API_KEY` set.
 
 ```bash
 docker run --rm --env-file .env \
