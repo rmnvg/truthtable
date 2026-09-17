@@ -1,4 +1,4 @@
-# darwinbox-fde-qa
+# truthtable
 
 A full-stack AI data Q&A app: upload one or more CSV/Excel files, and ask
 questions about them in plain English. The app turns each question into a
