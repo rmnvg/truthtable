@@ -1,6 +1,7 @@
 import io
 
 import pandas as pd
+import pytest
 
 from app.ingestion import clean_column_name, clean_dataframe, load_file_to_tables
 
@@ -50,3 +51,31 @@ def test_load_file_to_tables_multi_sheet_excel_produces_multiple_tables():
     assert set(tables.keys()) == {"report_sheet1", "report_sheet2"}
     assert tables["report_sheet1"]["a"].tolist() == [1, 2]
     assert tables["report_sheet2"]["b"].tolist() == [3, 4]
+
+
+def test_load_file_to_tables_header_only_csv_produces_empty_table():
+    csv_bytes = b"customer_id,order_total\n"
+
+    tables = load_file_to_tables("empty_orders.csv", csv_bytes)
+
+    assert list(tables.keys()) == ["empty_orders"]
+    df = tables["empty_orders"]
+    assert list(df.columns) == ["customer_id", "order_total"]
+    assert len(df) == 0
+
+
+def test_clean_dataframe_leaves_all_blank_column_untouched():
+    df = pd.DataFrame({"id": [1, 2, 3], "notes": [None, None, None]})
+    cleaned = clean_dataframe(df)
+
+    assert cleaned["notes"].isna().all()
+
+
+def test_load_file_to_tables_truly_empty_csv_raises_value_error():
+    with pytest.raises(ValueError):
+        load_file_to_tables("blank.csv", b"")
+
+
+def test_load_file_to_tables_unsupported_extension_raises_value_error():
+    with pytest.raises(ValueError):
+        load_file_to_tables("notes.txt", b"hello")

@@ -84,9 +84,23 @@ def load_file_to_tables(filename: str, content: bytes) -> dict[str, pd.DataFrame
 
     raw_tables: dict[str, pd.DataFrame] = {}
     if ext == ".csv":
-        raw_tables[stem] = pd.read_csv(io.BytesIO(content))
+        try:
+            raw_tables[stem] = pd.read_csv(io.BytesIO(content))
+        except pd.errors.EmptyDataError as exc:
+            raise ValueError(f"'{filename}' is empty and has no columns to read.") from exc
+        except (pd.errors.ParserError, UnicodeDecodeError) as exc:
+            raise ValueError(f"Could not parse '{filename}' as CSV: {exc}") from exc
     elif ext in (".xlsx", ".xls"):
-        sheets = pd.read_excel(io.BytesIO(content), sheet_name=None)
+        try:
+            sheets = pd.read_excel(io.BytesIO(content), sheet_name=None)
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"Could not parse '{filename}' as Excel: {exc}") from exc
+
+        if not sheets:
+            raise ValueError(f"'{filename}' has no sheets to read.")
+
         if len(sheets) > 1:
             for sheet_name, df in sheets.items():
                 raw_tables[f"{stem}_{sheet_name}"] = df
@@ -98,6 +112,10 @@ def load_file_to_tables(filename: str, content: bytes) -> dict[str, pd.DataFrame
             f"Unsupported file extension '{ext}' for '{filename}'. "
             "Only .csv, .xlsx, and .xls are supported."
         )
+
+    for name, df in raw_tables.items():
+        if df.shape[1] == 0:
+            raise ValueError(f"'{name}' in '{filename}' has no columns.")
 
     return {
         clean_column_name(name): clean_dataframe(df)
