@@ -1,13 +1,38 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createSession, uploadFiles, type UploadResponse } from "@/lib/api";
+import {
+  askQuestion,
+  createSession,
+  uploadFiles,
+  type QueryRow,
+  type UploadResponse,
+} from "@/lib/api";
 
 type TableEntry = {
   name: string;
   source: string;
   kind: "file" | "sheet";
 };
+
+type Exchange = {
+  id: string;
+  question: string;
+  status: "loading" | "done" | "error";
+  answer?: string;
+  sql?: string | null;
+  columns?: string[];
+  rows?: QueryRow[];
+  error?: string;
+};
+
+const MAX_DISPLAYED_ROWS = 50;
+
+function formatCellValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (value instanceof Date) return value.toISOString();
+  return String(value);
+}
 
 const ACCEPTED_EXTENSIONS = [".csv", ".xlsx", ".xls"];
 
@@ -28,6 +53,10 @@ export default function Home() {
   const [tables, setTables] = useState<TableEntry[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [question, setQuestion] = useState("");
+  const [exchanges, setExchanges] = useState<Exchange[]>([]);
+  const [isAsking, setIsAsking] = useState(false);
 
   useEffect(() => {
     createSession()
@@ -107,6 +136,52 @@ export default function Home() {
     }
     event.target.value = "";
   };
+
+  const handleAsk = useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      const trimmed = question.trim();
+      if (!sessionId || !trimmed || isAsking) return;
+
+      const id =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random()}`;
+
+      setExchanges((prev) => [...prev, { id, question: trimmed, status: "loading" }]);
+      setQuestion("");
+      setIsAsking(true);
+
+      try {
+        const res = await askQuestion(sessionId, trimmed);
+        setExchanges((prev) =>
+          prev.map((ex) =>
+            ex.id === id
+              ? {
+                  ...ex,
+                  status: "done",
+                  answer: res.answer,
+                  sql: res.sql,
+                  columns: res.columns,
+                  rows: res.rows,
+                }
+              : ex
+          )
+        );
+      } catch (err) {
+        setExchanges((prev) =>
+          prev.map((ex) =>
+            ex.id === id ? { ...ex, status: "error", error: errorMessage(err) } : ex
+          )
+        );
+      } finally {
+        setIsAsking(false);
+      }
+    },
+    [sessionId, question, isAsking]
+  );
+
+  const hasTables = tables.length > 0;
 
   return (
     <div className="flex flex-1 flex-col items-center bg-zinc-50 font-sans dark:bg-black">
@@ -195,6 +270,114 @@ export default function Home() {
             </ul>
           </section>
         )}
+
+        <section className="flex flex-col gap-4">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            Ask a question
+          </h2>
+
+          {exchanges.length > 0 && (
+            <div className="flex flex-col gap-6">
+              {exchanges.map((exchange) => (
+                <div key={exchange.id} className="flex flex-col gap-2">
+                  <div className="self-start rounded-2xl rounded-bl-sm bg-zinc-950 px-4 py-2 text-sm text-white dark:bg-zinc-100 dark:text-zinc-950">
+                    {exchange.question}
+                  </div>
+
+                  {exchange.status === "loading" && (
+                    <div className="flex items-center gap-2 self-start rounded-2xl rounded-bl-sm bg-zinc-100 px-4 py-2 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-600 dark:border-zinc-700 dark:border-t-zinc-300" />
+                      Thinking…
+                    </div>
+                  )}
+
+                  {exchange.status === "error" && (
+                    <div className="self-start rounded-2xl rounded-bl-sm bg-red-50 px-4 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+                      Something went wrong: {exchange.error}
+                    </div>
+                  )}
+
+                  {exchange.status === "done" && (
+                    <div className="flex max-w-full flex-col gap-3 self-start rounded-2xl rounded-bl-sm bg-zinc-100 px-4 py-3 text-sm text-zinc-900 dark:bg-zinc-900 dark:text-zinc-100">
+                      <p>{exchange.answer}</p>
+
+                      {exchange.sql && (
+                        <details className="group">
+                          <summary className="cursor-pointer text-xs font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200">
+                            Show SQL used
+                          </summary>
+                          <pre className="mt-2 overflow-x-auto rounded-lg bg-zinc-950 px-3 py-2 text-xs text-zinc-100 dark:bg-black">
+                            <code>{exchange.sql}</code>
+                          </pre>
+                        </details>
+                      )}
+
+                      {exchange.columns && exchange.columns.length > 0 && exchange.rows && (
+                        <div className="flex flex-col gap-1">
+                          <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+                            <table className="min-w-full text-left text-xs">
+                              <thead className="bg-zinc-50 dark:bg-zinc-950">
+                                <tr>
+                                  {exchange.columns.map((col) => (
+                                    <th
+                                      key={col}
+                                      className="whitespace-nowrap px-3 py-2 font-mono font-semibold text-zinc-600 dark:text-zinc-400"
+                                    >
+                                      {col}
+                                    </th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {exchange.rows.slice(0, MAX_DISPLAYED_ROWS).map((row, rowIndex) => (
+                                  <tr
+                                    key={rowIndex}
+                                    className="border-t border-zinc-200 dark:border-zinc-800"
+                                  >
+                                    {exchange.columns!.map((col) => (
+                                      <td key={col} className="whitespace-nowrap px-3 py-2">
+                                        {formatCellValue(row[col])}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          {exchange.rows.length > MAX_DISPLAYED_ROWS && (
+                            <p className="text-xs text-zinc-500 dark:text-zinc-500">
+                              Showing {MAX_DISPLAYED_ROWS} of {exchange.rows.length} rows.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <form onSubmit={handleAsk} className="flex gap-2">
+            <input
+              type="text"
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              disabled={!hasTables || isAsking}
+              placeholder={
+                hasTables ? "Ask a question about your data…" : "Upload a file to start asking questions"
+              }
+              className="flex-1 rounded-xl border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+            />
+            <button
+              type="submit"
+              disabled={!hasTables || isAsking || !question.trim()}
+              className="shrink-0 rounded-xl bg-zinc-950 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-300"
+            >
+              {isAsking ? "Asking…" : "Send"}
+            </button>
+          </form>
+        </section>
       </main>
     </div>
   );
