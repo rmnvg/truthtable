@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+pandas
+duckdb
+python-multipart
+openpyxl
+groq
+pytest
