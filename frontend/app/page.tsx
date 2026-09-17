@@ -5,9 +5,11 @@ import {
   askQuestion,
   createSession,
   uploadFiles,
+  type ChartSuggestion,
   type QueryRow,
   type UploadResponse,
 } from "@/lib/api";
+import { ResultChart } from "@/components/ResultChart";
 
 type TableEntry = {
   name: string;
@@ -23,6 +25,7 @@ type Exchange = {
   sql?: string | null;
   columns?: string[];
   rows?: QueryRow[];
+  chart?: ChartSuggestion | null;
   error?: string;
 };
 
@@ -164,6 +167,7 @@ export default function Home() {
                   sql: res.sql,
                   columns: res.columns,
                   rows: res.rows,
+                  chart: res.chart,
                 }
               : ex
           )
@@ -350,6 +354,10 @@ export default function Home() {
                             </p>
                           )}
                         </div>
+                      )}
+
+                      {exchange.chart && exchange.rows && exchange.rows.length > 0 && (
+                        <ResultChart chart={exchange.chart} rows={exchange.rows} />
                       )}
                     </div>
                   )}
