@@ -23,6 +23,23 @@ def test_clean_dataframe_strips_currency_and_coerces_numeric():
     assert cleaned["amount"].tolist() == [1200.0, 2400.0, 3600.0]
 
 
+def test_clean_dataframe_does_not_coerce_bare_month_names_to_dates():
+    # dateutil fuzzy-parses "January" into a fabricated date (arbitrary day/year),
+    # even though a bare month name carries no real date information.
+    df = pd.DataFrame({"Month": ["January", "February", "March", "April"]})
+    cleaned = clean_dataframe(df)
+
+    assert not pd.api.types.is_datetime64_any_dtype(cleaned["month"])
+    assert cleaned["month"].tolist() == ["January", "February", "March", "April"]
+
+
+def test_clean_dataframe_still_coerces_real_dates():
+    df = pd.DataFrame({"Order Date": ["2024-01-05", "2024-02-10", "2024-03-15"]})
+    cleaned = clean_dataframe(df)
+
+    assert pd.api.types.is_datetime64_any_dtype(cleaned["order_date"])
+
+
 def test_load_file_to_tables_csv_round_trip_with_currency_column():
     csv_bytes = (
         b"Customer ID,Order Total\n"

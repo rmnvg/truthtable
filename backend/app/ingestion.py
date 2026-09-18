@@ -10,6 +10,7 @@ import pandas as pd
 _NUMERIC_STRIP_RE = re.compile(r"[$₹,%]")
 _NON_WORD_RE = re.compile(r"[^\w]+")
 _MULTI_UNDERSCORE_RE = re.compile(r"_+")
+_HAS_DIGIT_RE = re.compile(r"\d")
 
 _PARSE_THRESHOLD = 0.8
 _JOIN_SIMILARITY_THRESHOLD = 0.6
@@ -67,6 +68,14 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         numeric = pd.to_numeric(series.map(_clean_numeric_string), errors="coerce")
         if (numeric.notna() & non_null).sum() / non_null_count > _PARSE_THRESHOLD:
             df[col] = numeric
+            continue
+
+        # A bare month/weekday name ("January", "Monday") has no digits at all,
+        # but dateutil fuzzy-fills the missing day/year and "parses" it anyway —
+        # so without this check, a plain "month" column of names silently turns
+        # into fabricated dates. No real date format is digit-free.
+        digit_ratio = series[non_null].map(lambda v: bool(_HAS_DIGIT_RE.search(str(v)))).mean()
+        if digit_ratio <= _PARSE_THRESHOLD:
             continue
 
         with warnings.catch_warnings():
