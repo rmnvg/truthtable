@@ -68,8 +68,19 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export interface SessionStateResponse {
+  session_id: string;
+  tables: string[];
+  join_hints: JoinHint[];
+}
+
 export function createSession(): Promise<SessionResponse> {
   return request<SessionResponse>("/session", { method: "POST" });
+}
+
+/** Throws SessionExpiredError if the backend no longer has this session. */
+export function getSession(sessionId: string): Promise<SessionStateResponse> {
+  return request<SessionStateResponse>(`/session/${sessionId}`, { method: "GET" });
 }
 
 export function uploadFiles(sessionId: string, files: File[]): Promise<UploadResponse> {

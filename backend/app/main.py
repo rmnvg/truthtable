@@ -41,6 +41,18 @@ def create_session_endpoint():
     return {"session_id": session_id}
 
 
+@app.get("/session/{session_id}")
+def get_session_endpoint(session_id: str):
+    """Lets the client check whether a stored session still exists server-side —
+    sessions live in memory, so a restart invalidates them."""
+    session = _require_session(session_id)
+    return {
+        "session_id": session_id,
+        "tables": session.tables,
+        "join_hints": find_join_candidates(session.connection, session.tables),
+    }
+
+
 @app.post("/upload")
 async def upload_files(session_id: str = Form(...), files: list[UploadFile] = File(...)):
     session = _require_session(session_id)
