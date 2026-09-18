@@ -12,3 +12,18 @@ services:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
+
+  frontend:
+    build: ./frontend
+    image: truthtable-frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend/app:/app/app
+      - ./frontend/components:/app/components
+      - ./frontend/lib:/app/lib
+      - ./frontend/public:/app/public
+    env_file:
+      - ./frontend/.env.local
+    depends_on:
+      - backend

@@ -215,38 +215,39 @@ on `region`.)
 ```bash
 cp .env.example .env
 # edit .env and set GROQ_API_KEY=<your key>
+
+cp frontend/.env.local.example frontend/.env.local   # NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
 
-`.env` (repo root) is used by the backend, whether run via Docker or
-directly. `GROQ_MODEL` defaults to `openai/gpt-oss-120b` if unset.
+### 2. Run everything
 
-### 2. Backend
-
-**With Docker (recommended):**
+**With Docker (recommended — this is the whole app, one command):**
 
 ```bash
 docker compose up --build
 ```
 
-API is available at http://localhost:8000, with live reload on changes to
-`backend/app`.
+This builds and starts **both** the backend and the frontend as containers.
+- Backend API: http://localhost:8000
+- Frontend: http://localhost:3000
 
-**Without Docker:**
+Both have live reload on source changes. `docker compose down` stops both.
+There is no separate frontend process to manage — if you only ever run
+`docker compose up`/`down`, that's the complete lifecycle of the app.
+
+**Without Docker** (two terminals):
 
 ```bash
+# terminal 1 — backend
 cd backend
 python3.11 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 export $(grep -v '^#' ../.env | xargs)   # load GROQ_API_KEY into the shell
 uvicorn app.main:app --reload
-```
 
-### 3. Frontend
-
-```bash
+# terminal 2 — frontend
 cd frontend
-cp .env.local.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:8000
 npm install
 npm run dev
 ```

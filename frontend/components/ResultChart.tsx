@@ -130,6 +130,9 @@ export function ResultChart({ chart, rows }: ResultChartProps) {
   }
 
   const axisStyle = { fontSize: 12, fill: chrome.tick };
+  // Recharts anchors the first/last tick label exactly at the plot edge, so
+  // it renders half-clipped without this inset padding.
+  const axisPadding = { left: 40, right: 40 };
 
   if (chart.type === "line") {
     return (
@@ -141,6 +144,7 @@ export function ResultChart({ chart, rows }: ResultChartProps) {
             tick={axisStyle}
             stroke={chrome.axis}
             tickFormatter={formatValue}
+            padding={axisPadding}
           />
           <YAxis tick={axisStyle} stroke={chrome.axis} />
           <Tooltip
@@ -175,6 +179,7 @@ export function ResultChart({ chart, rows }: ResultChartProps) {
           tick={axisStyle}
           stroke={chrome.axis}
           tickFormatter={formatValue}
+          padding={axisPadding}
         />
         <YAxis tick={axisStyle} stroke={chrome.axis} />
         <Tooltip
