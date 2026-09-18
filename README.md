@@ -6,6 +6,9 @@ DuckDB SQL query, runs it against your actual uploaded data, and returns a
 natural-language answer alongside the exact SQL used (so you can verify it
 rather than just trust it) and, where it helps, a chart.
 
+> 🎥 **[Demo video](https://docs.google.com/videos/d/1tvdfjaaxUbnGl7Mp8TJyd5xSwbRq2Nq6C59MEfyJD5M/play?usp=sharing)** — walkthrough of multi-file
+> upload, cross-file joins, charts, and the answer-refusal guardrail.
+>
 > **[WRITEUP.md](WRITEUP.md)** — one-page summary of the approach, the key
 > decisions and their trade-offs, and what I'd build next.
 
