@@ -1,3 +1,4 @@
+import math
 import os
 
 from groq import Groq
@@ -129,15 +130,28 @@ def suggest_chart(question: str, sql: str, result_columns: list[str]) -> dict | 
     return {"type": chart_type, "x": x_column, "y": y_column}
 
 
+def _clean_float_noise(value):
+    """SUM/AVG over floats yields artefacts like 59868.56999999999. Handing that
+    to the model puts it verbatim into the answer sentence, so strip the
+    representation noise while keeping genuine precision."""
+    if isinstance(value, float) and math.isfinite(value):
+        return float(f"{value:.12g}")
+    return value
+
+
 def summarize_answer(question: str, columns: list[str], rows: list[tuple]) -> str:
     system_prompt = (
         "You are given the question and the already-correctly-computed query "
         "result. Write exactly one short sentence that answers the question, "
         "using only the values provided. Do not recompute, estimate, or bring "
-        "in any numbers from outside the given result."
+        "in any numbers from outside the given result. Write numbers the way a "
+        "person would (thousands separators, at most two decimal places)."
     )
     sample_rows = rows[:20]
-    rows_text = "\n".join(str(dict(zip(columns, row))) for row in sample_rows)
+    rows_text = "\n".join(
+        str({col: _clean_float_noise(val) for col, val in zip(columns, row)})
+        for row in sample_rows
+    )
     user_prompt = (
         f"Question: {question}\n"
         f"Columns: {', '.join(columns)}\n"

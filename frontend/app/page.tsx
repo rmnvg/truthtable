@@ -200,6 +200,26 @@ export default function Home() {
     [activeSessionId]
   );
 
+  /** A chat whose backend session died is unusable until it gets a live one.
+   * Mint a fresh session and swap it onto this chat, keeping the conversation. */
+  const reviveSession = useCallback(async (deadId: string): Promise<string | null> => {
+    try {
+      const res = await createSession();
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id === deadId
+            ? { ...s, id: res.session_id, expired: false, tables: [], joinHints: [] }
+            : s
+        )
+      );
+      setActiveSessionId((current) => (current === deadId ? res.session_id : current));
+      return res.session_id;
+    } catch (err) {
+      setSessionError(errorMessage(err));
+      return null;
+    }
+  }, []);
+
   const handleFiles = useCallback(
     async (fileList: FileList | File[]) => {
       const files = Array.from(fileList);
@@ -225,36 +245,58 @@ export default function Home() {
       if (validFiles.length === 0) return;
 
       setIsUploading(true);
-      const newEntries: TableEntry[] = [];
-      const failures: string[] = [];
-      let latestHints: JoinHint[] | null = null;
-      let sessionLost = false;
 
-      for (const file of validFiles) {
-        try {
-          const result: UploadResponse = await uploadFiles(sessionId, [file]);
-          const kind: TableEntry["kind"] = result.added.length > 1 ? "sheet" : "file";
-          for (const name of result.added) {
-            newEntries.push({ name, source: file.name, kind });
+      const uploadTo = async (target: string) => {
+        const entries: TableEntry[] = [];
+        const failed: string[] = [];
+        let hints: JoinHint[] | null = null;
+        let lost = false;
+
+        for (const file of validFiles) {
+          try {
+            const result: UploadResponse = await uploadFiles(target, [file]);
+            const kind: TableEntry["kind"] = result.added.length > 1 ? "sheet" : "file";
+            for (const name of result.added) {
+              entries.push({ name, source: file.name, kind });
+            }
+            hints = result.join_hints;
+          } catch (err) {
+            if (err instanceof SessionExpiredError) {
+              lost = true;
+              break;
+            }
+            failed.push(`${file.name}: ${errorMessage(err)}`);
           }
-          latestHints = result.join_hints;
-        } catch (err) {
-          if (err instanceof SessionExpiredError) {
-            sessionLost = true;
-            break;
-          }
-          failures.push(`${file.name}: ${errorMessage(err)}`);
         }
+        return { entries, failed, hints, lost };
+      };
+
+      let targetId = sessionId;
+      let { entries: newEntries, failed: failures, hints: latestHints, lost } =
+        await uploadTo(targetId);
+
+      // The backend forgot this session (it restarted). Give the chat a live
+      // session and retry once, so re-uploading actually recovers it.
+      if (lost) {
+        const revivedId = await reviveSession(sessionId);
+        if (!revivedId) {
+          setUploadError(SESSION_LOST_MESSAGE);
+          setIsUploading(false);
+          return;
+        }
+        targetId = revivedId;
+        ({ entries: newEntries, failed: failures, hints: latestHints, lost } =
+          await uploadTo(targetId));
+        if (lost) {
+          setUploadError(SESSION_LOST_MESSAGE);
+          setIsUploading(false);
+          return;
+        }
+        setUploadError(null);
       }
 
-      if (sessionLost) {
-        updateSession(sessionId, (s) => ({ ...s, expired: true, tables: [], joinHints: [] }));
-        setUploadError(SESSION_LOST_MESSAGE);
-        setIsUploading(false);
-        return;
-      }
-
-      updateSession(sessionId, (s) => {
+      const sessionIdForUpdate = targetId;
+      updateSession(sessionIdForUpdate, (s) => {
         // Re-uploading a file replaces its table rather than adding a duplicate.
         const merged = [...s.tables];
         for (const entry of newEntries) {
@@ -273,7 +315,7 @@ export default function Home() {
       }
       setIsUploading(false);
     },
-    [activeSessionId, updateSession]
+    [activeSessionId, updateSession, reviveSession]
   );
 
   // Declared after handleFiles so the dependency array isn't evaluated in its TDZ.
@@ -337,10 +379,12 @@ export default function Home() {
             : ex
         ),
       }));
+      // Give the chat a live session so re-uploading can recover it.
+      if (expired) await reviveSession(sessionId);
     } finally {
       setIsAsking(false);
     }
-  }, [activeSessionId, question, isAsking, updateSession]);
+  }, [activeSessionId, question, isAsking, updateSession, reviveSession]);
 
   // ---- window-wide drag & drop ----
   const onDragEnter = (event: React.DragEvent) => {
